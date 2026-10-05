@@ -147,6 +147,7 @@ class EditLayerDefs extends ui.modal.Panel {
 						case DeleteBakedLayer:
 						case EmptyBakedLayer:
 							@:privateAccess sourceLi.intGrid = new Map();
+							sourceLi.recountAllIntGridValues();
 							sourceLi.autoTilesCache = null;
 						case KeepBakedLayer:
 					}
@@ -227,6 +228,26 @@ class EditLayerDefs extends ui.modal.Panel {
 		updateList();
 	}
 
+
+	/**
+		Return TRUE if `ld` can be used as a "Derived IntGrid" source for `target`:
+		it must be an IntGrid layer and must not (transitively) depend on `target` (would create a cycle).
+	**/
+	public static function isDerivedSourceCandidate(ld:data.def.LayerDef, target:data.def.LayerDef) : Bool {
+		if( ld.uid==target.uid || ld.type!=IntGrid )
+			return false;
+
+		var visited = new Map<Int,Bool>();
+		var l : Null<data.def.LayerDef> = ld;
+		while( l!=null && !visited.exists(l.uid) ) {
+			if( l.uid==target.uid )
+				return false; // Cycle
+			visited.set(l.uid, true);
+			l = l.autoSourceLd;
+		}
+		return true;
+	}
+
 	function updateForm() {
 		Tip.clear();
 		jForms.find("*").off(); // cleanup event listeners
@@ -257,10 +278,14 @@ class EditLayerDefs extends ui.modal.Panel {
 		jForms.addClass("type-"+cur.type);
 		if( cur.type==IntGrid && cur.isAutoLayer() )
 			jForms.addClass("type-IntGridAutoLayer");
+		if( cur.isDerived() )
+			jForms.addClass("derived");
+		else
+			jForms.removeClass("derived");
 
 		jForms.find("span.typeIcon").empty().append( JsTools.createLayerTypeIconAndName(cur.type) );
 
-		jContent.find("#typeSpecificTitle").text( cur.type.getName() );
+		jContent.find("#typeSpecificTitle").text( cur.isDerived() ? "Derived IntGrid" : cur.type.getName() );
 
 
 		// Identifier
@@ -416,7 +441,7 @@ class EditLayerDefs extends ui.modal.Panel {
 
 		// Edit rules
 		var jButton = jForms.find("button.editAutoRules");
-		if( cur.autoLayerRulesCanBeUsed() ) {
+		if( cur.autoLayerRulesCanBeUsed() || cur.derivedRulesCanBeUsed() ) {
 			jButton.show();
 
 			jButton.click( (_)->{
@@ -521,6 +546,105 @@ class EditLayerDefs extends ui.modal.Panel {
 		switch cur.type {
 
 			case IntGrid:
+				// Derived IntGrid flag
+				var jDerived = jForms.find("input[name=derivedIntGrid]");
+				jDerived.off().prop("checked", cur.isDerivedIntGrid);
+				jDerived.change( _->{
+					var newValue : Bool = jDerived.prop("checked");
+					if( newValue==cur.isDerivedIntGrid )
+						return;
+
+					if( newValue ) {
+						// A valid source layer is required
+						var candidates = project.defs.layers.filter( ld->isDerivedSourceCandidate(ld,cur) );
+						if( candidates.length==0 ) {
+							new ui.modal.dialog.Message(L.t._("You need at least one other IntGrid layer to use as a source."));
+							jDerived.prop("checked", false);
+							return;
+						}
+
+						new LastChance(L.t._("Derived IntGrid enabled"), project);
+						cur.isDerivedIntGrid = true;
+						if( cur.autoSourceLayerDefUid==null ) {
+							cur.autoSourceLayerDefUid = candidates[0].uid;
+							cur.gridSize = candidates[0].gridSize;
+						}
+						cur.tidy(project);
+						updateForm();
+						editor.ge.emit( LayerDefChanged(cur.uid, true) );
+					}
+					else {
+						new LastChance(L.t._("Derived IntGrid disabled"), project);
+
+						// Bake computed values in the whole project BEFORE disabling the flag
+						for(w in project.worlds)
+						for(l in w.levels) {
+							var li = l.getLayerInstance(cur);
+							if( li!=null )
+								li.refreshDerivedValues();
+						}
+
+						cur.isDerivedIntGrid = false;
+						cur.tidy(project);
+						updateForm();
+						editor.ge.emit( LayerDefChanged(cur.uid, true) );
+					}
+				});
+
+				// Derived source layer
+				var jDerivedSrc = jForms.find("select[name=derivedSource]");
+				jDerivedSrc.empty();
+				var opt = new J("<option/>");
+				opt.appendTo(jDerivedSrc);
+				opt.attr("value", -1);
+				opt.text("-- Select an IntGrid layer --");
+				for( ld in project.defs.layers )
+					if( isDerivedSourceCandidate(ld,cur) ) {
+						var opt = new J("<option/>");
+						opt.appendTo(jDerivedSrc);
+						opt.attr("value", ld.uid);
+						opt.text( ld.identifier + ( ld.isDerived() ? " (derived)" : "" ) );
+					}
+				jDerivedSrc.val( cur.autoSourceLayerDefUid==null ? -1 : cur.autoSourceLayerDefUid );
+				if( cur.autoSourceLayerDefUid!=null && jDerivedSrc.val()==null ) {
+					// Stored source is not a valid candidate anymore (eg. its type changed)
+					var opt = new J("<option/>");
+					opt.appendTo(jDerivedSrc);
+					opt.attr("value", cur.autoSourceLayerDefUid);
+					opt.text("(invalid source)");
+					jDerivedSrc.val( cur.autoSourceLayerDefUid );
+				}
+				if( cur.isDerived() && cur.autoSourceLayerDefUid==null )
+					jDerivedSrc.addClass("required");
+				else
+					jDerivedSrc.removeClass("required");
+				jDerivedSrc.off("change").change( _->{
+					var v = Std.parseInt( jDerivedSrc.val() );
+					if( v<0 )
+						cur.autoSourceLayerDefUid = null;
+					else {
+						var source = project.defs.getLayerDef(v);
+						if( source==null )
+							return;
+
+						for(rg in cur.autoRuleGroups)
+						for(r in rg.rules)
+							if( r.isUsingUnknownIntGridValues(source) )
+								App.LOG.error(r+" intGrid value not found in "+source);
+
+						cur.autoSourceLayerDefUid = v;
+						cur.gridSize = source.gridSize;
+					}
+					cur.tidy(project);
+					updateForm();
+					editor.ge.emit( LayerDefChanged(cur.uid,true) );
+				});
+
+				// Derived layers always use their source grid size
+				if( cur.isDerived() )
+					jForms.find("#gridSize").prop("readonly",true);
+
+
 				// Guess icons tileset UID
 				if( intGridValuesIconsTdUid==null )
 					for(v in cur.getAllIntGridValues())

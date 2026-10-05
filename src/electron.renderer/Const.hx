@@ -189,6 +189,8 @@ class Const {
 
 	public static var AUTO_LAYER_ANYTHING = 1000001;
 	public static var MAX_AUTO_PATTERN_SIZE = 9;
+	public static var MAX_RULE_OUTPUT_OFFSET = 1024;
+	public static var DUAL_GRID_MASK_COUNT = 16; // Dual-grid rules: one tile per 0-15 mask of the 4 cells around a grid corner
 
 #end
 }

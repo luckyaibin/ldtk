@@ -42,6 +42,9 @@ class SelectionTool extends Tool<Int> {
 			if( !li.def.canSelectWhenInactive && li!=editor.curLayerInstance )
 				continue;
 
+			if( li.def.isDerivedIntGrid )
+				continue; // Derived IntGrid values are computed: they can't be selected/edited
+
 			switch li.def.type {
 				case IntGrid, Tiles:
 					for(cy in 0...li.cHei)
@@ -325,7 +328,9 @@ class SelectionTool extends Tool<Int> {
 					if( li.hasAnyGridValue(cx,cy) ) {
 						editor.curLevelTimeline.markGridChange(li, cx,cy);
 						switch li.def.type {
-							case IntGrid: li.removeIntGrid(cx,cy,true);
+							case IntGrid:
+								if( !li.def.isDerivedIntGrid )
+									li.removeIntGrid(cx,cy,true);
 							case Tiles: li.removeAllGridTiles(cx,cy,true);
 							case Entities:
 							case AutoLayer:

@@ -8237,6 +8237,7 @@ dl.form.fieldInstanceEditor {
 	dl.form .IntGrid,
 	dl.form .IntGridAutoLayer,
 	dl.form .AutoLayer,
+	dl.form .DerivedIntGrid,
 	dl.form .Tiles,
 	dl.form .Entities {
 		display: none;
@@ -8251,6 +8252,17 @@ dl.form.fieldInstanceEditor {
 		&:not(dt, label) {
 			display: flex;
 		}
+	}
+
+	// Derived IntGrid layers (IntGrid type with an editor-only "derived" flag)
+	dl.form.derived .DerivedIntGrid {
+		display: grid;
+		&:not(dt, label) {
+			display: flex;
+		}
+	}
+	dl.form.derived .autoLayerOnly {
+		display: none !important;
 	}
 }
 
@@ -8565,6 +8577,11 @@ body.sorting ul.collapsedSortTarget {
 			button.close {
 				padding: 3px;
 			}
+		}
+
+		// Derived IntGrid layers don't use tilesets
+		&.derived header #autoLayerTileset {
+			display: none;
 		}
 
 		header {
@@ -9033,10 +9050,84 @@ body.sorting ul.collapsedSortTarget {
 							border-color: white;
 						}
 
+						// Derived IntGrid rules: hide tile-only options
+						&.derived .options {
+							[name="alpha"],
+							a.randomOffset {
+								display: none;
+							}
+						}
+
+						// Dual-grid rules: hide options that don't apply in this mode, and add a tag on the preview
+						&.dualGrid {
+							.options {
+								a.flipX,
+								a.flipY,
+								a.break,
+								a.randomOffset,
+								.modulo {
+									display: none;
+								}
+							}
+
+							>.preview {
+								position: relative;
+
+								&::after {
+									content: "DG";
+									position: absolute;
+									top: -1px;
+									right: -1px;
+									padding: 0 2px;
+									font-size: 7pt;
+									font-weight: bold;
+									color: white;
+									background-color: $orange;
+									border-radius: 2px;
+									opacity: 0.9;
+									pointer-events: none;
+								}
+							}
+						}
+
 						.options {
 							display: grid;
 							grid-template-columns: repeat(7, 1fr);
 							gap: 2px;
+
+							// Derived IntGrid rules: output cells (values & offsets) instead of tile settings
+							.outputs {
+								grid-column: 1 / -1;
+								display: flex;
+								align-items: center;
+								gap: 3px;
+								font-size: 9pt;
+
+								.outputEntry {
+									display: flex;
+									align-items: center;
+									gap: 3px;
+									padding: 0 4px;
+									border-left: 1px solid rgba(0,0,0,0.3);
+
+									&:first-child {
+										border-left: none;
+										padding-left: 0;
+									}
+								}
+								.outputValue {
+									padding: 1px 5px;
+									border-radius: 3px;
+									white-space: nowrap;
+								}
+								.offset {
+									font-size: 8pt;
+									opacity: 0.7;
+								}
+								.empty {
+									color: $red;
+								}
+							}
 
 							&>* {
 								padding: 3px;
@@ -9646,6 +9737,7 @@ $patternSize : 32px;
 		.explain,
 		.outOfBounds,
 		.tileSettings,
+		.outputSettings,
 		.pattern .editor,
 		.pattern .valuePalette {
 			width: 100%;
@@ -9654,6 +9746,224 @@ $patternSize : 32px;
 			box-sizing: border-box;
 			background-color: $bgDark;
 			border-radius: 3px;
+		}
+
+		// Dual-grid mode: replace the regular tile UI with the 16 corner-mask slots
+		.dualGridToggle {
+			display: flex;
+			align-items: center;
+			gap: 6px;
+			margin-bottom: 8px;
+			white-space: nowrap;
+			cursor: pointer;
+
+			input[type=checkbox] {
+				flex: 0 0 auto;
+				width: 20px;
+				height: 20px;
+				margin: 0;
+			}
+		}
+
+		.dualGridSettings {
+			display: none;
+			gap: $gutter;
+
+			.dgInfo {
+				font-size: 9pt;
+				opacity: 0.75;
+			}
+
+			.maskSlots {
+				display: grid;
+				grid-template-columns: repeat(4, 1fr);
+				gap: 3px;
+				justify-items: center;
+
+				.maskSlot {
+					position: relative;
+					display: grid;
+					grid-template-rows: 17px minmax(28px, auto);
+					justify-items: center;
+					align-items: center;
+					gap: 3px;
+					width: 100%;
+					padding: 4px 2px;
+					box-sizing: border-box;
+					background-color: $bgMed;
+					border-radius: 3px;
+					cursor: pointer;
+
+					&:hover {
+						outline: 1px solid $orange;
+					}
+
+					.diagram {
+						display: grid;
+						grid-template-columns: repeat(2, 7px);
+						grid-template-rows: repeat(2, 7px);
+						gap: 1px;
+						pointer-events: none;
+
+						.q {
+							background-color: $bgDark;
+							border-radius: 1px;
+
+							&.on {
+								background-color: $green;
+							}
+						}
+					}
+
+					img {
+						// Explicit auto sizing: the HTML width/height attributes otherwise
+						// get clamped by max-height only, squashing the square tile
+						width: auto;
+						height: auto;
+						max-width: 100%;
+						max-height: 28px;
+						pointer-events: none;
+					}
+
+					.noTile {
+						display: grid;
+						justify-content: center;
+						align-content: center;
+						width: 100%;
+						height: 28px;
+						box-sizing: border-box;
+						color: $red;
+						background-color: $bgDark;
+						border-radius: 2px;
+						pointer-events: none;
+					}
+				}
+			}
+
+			.fillFromTileset {
+				justify-self: start;
+			}
+		}
+
+		&.dualgrid {
+			.tileSettings {
+				>select,
+				>.tileRects,
+				>.options {
+					display: none;
+				}
+
+				>.dualGridSettings {
+					display: grid;
+				}
+			}
+
+			.tileHelp {
+				display: none;
+			}
+		}
+
+		// Derived IntGrid layers: tiles settings are replaced by output values & offsets
+		.outputSettings,
+		.outputHelp {
+			display: none;
+		}
+		&.derived {
+			.tileSettings,
+			.tileHelp {
+				display: none;
+			}
+			.outputSettings {
+				display: grid;
+				gap: $gutter;
+				align-content: start;
+
+				>.outputList {
+					display: grid;
+					gap: 4px;
+					align-content: start;
+					padding: 3px;
+					min-height: 32px;
+
+					>.error {
+						padding: 6px;
+						font-size: 9pt;
+						color: $red;
+					}
+
+					.outputEntry {
+						display: grid;
+						grid-template-columns: auto min-content min-content;
+						align-items: center;
+						gap: 6px;
+						padding: 3px 6px;
+						border-radius: 3px;
+						box-shadow: 0 0 8px black inset;
+
+						>.values {
+							display: flex;
+							flex-wrap: wrap;
+							align-content: flex-start;
+							gap: 3px;
+							min-height: 24px;
+
+							.empty {
+								padding: 2px 4px;
+								font-size: 9pt;
+								color: $red;
+							}
+
+							.outputValue {
+								display: flex;
+								align-items: center;
+								gap: 3px;
+								padding: 2px 6px 2px 2px;
+								border: 1px solid transparent;
+								border-radius: 3px;
+								cursor: pointer;
+								opacity: 0.4;
+
+								&:hover {
+									opacity: 0.8;
+								}
+								&.active {
+									opacity: 1;
+									border-color: white;
+								}
+								.name {
+									font-size: 9pt;
+									white-space: nowrap;
+								}
+							}
+						}
+
+						>.offsets {
+							display: flex;
+							align-items: center;
+							gap: 4px;
+							font-size: 9pt;
+							color: $bgLighter;
+							white-space: nowrap;
+
+							input {
+								width: 5em;
+							}
+						}
+
+						>button.delete {
+							padding: 2px;
+							.icon {
+								width: 14px;
+								height: 14px;
+							}
+						}
+					}
+				}
+
+				>.addOutput {
+					justify-self: start;
+				}
+			}
 		}
 
 		.debugInfos {

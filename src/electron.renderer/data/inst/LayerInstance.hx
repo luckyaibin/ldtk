@@ -42,6 +42,11 @@ class LayerInstance {
 
 	// Layer content
 	var intGrid : Map<Int,Int> = new Map(); // <coordId, value>
+
+	/** Derived IntGrid layers: values must be recomputed (not serialized) **/
+	public var derivedValuesDirty = false;
+	public inline function isDerived() return def.isDerived();
+
 	public var entityInstances : Array<EntityInstance> = [];
 	public var gridTiles : Map<Int, Array<GridTileInfos>> = []; // <coordId, tileinfos>
 	var overrideTilesetUid : Null<Int>;
@@ -202,6 +207,10 @@ class LayerInstance {
 	}
 
 	public function toJson() : ldtk.Json.LayerInstanceJson {
+		// Derived IntGrid: make sure exported values are up-to-date
+		if( isDerived() && derivedValuesDirty )
+			applyAllDerivedRules();
+
 		var td = getTilesetDef();
 
 		var json : ldtk.Json.LayerInstanceJson = {
@@ -365,7 +374,10 @@ class LayerInstance {
 		li.pxOffsetY = JsonTools.readInt(json.pxOffsetY, 0);
 		li.visible = JsonTools.readBool(json.visible, true);
 
-		if( json.intGridCsv==null ) {
+		if( li.def.isDerived() )
+			// Derived IntGrid values are recomputed from rules (see applyAllDerivedRules)
+			li.derivedValuesDirty = true;
+		else if( json.intGridCsv==null ) {
 			// Read old pre-CSV format
 			for( intGridJson in json.intGrid )
 				li.intGrid.set( intGridJson.coordId, intGridJson.v+1 );
@@ -498,17 +510,20 @@ class LayerInstance {
 
 		switch def.type {
 			case IntGrid, AutoLayer:
-				// Remove lost intGrid values
+				// Remove lost intGrid values (derived IntGrid values are recomputed by applyAllDerivedRules)
 				if( def.type==IntGrid )
-					for(cy in 0...cHei)
-					for(cx in 0...cWid)
-						if( hasIntGrid(cx,cy) && !def.hasIntGridValue( getIntGrid(cx,cy) ) ) {
-							removeIntGrid(cx,cy,false);
-							if( def.isAutoLayer() )
-								autoTilesCache = null;
-							anyChange = true;
-							// no logging as this could be a LOT of entries
-						}
+					if( def.isDerivedIntGrid )
+						derivedValuesDirty = true;
+					else
+						for(cy in 0...cHei)
+						for(cx in 0...cWid)
+							if( hasIntGrid(cx,cy) && !def.hasIntGridValue( getIntGrid(cx,cy) ) ) {
+								removeIntGrid(cx,cy,false);
+								if( def.isAutoLayer() )
+									autoTilesCache = null;
+								anyChange = true;
+								// no logging as this could be a LOT of entries
+							}
 
 				if( def.isAutoLayer() && autoTilesCache!=null ) {
 					// Discard lost rules autoTiles
@@ -569,16 +584,24 @@ class LayerInstance {
 		var cDeltaY = Std.int( totalOffsetY / def.gridSize);
 		switch def.type {
 			case IntGrid:
-				// Remap coords
-				var old = intGrid;
-				intGrid = new Map();
-				for(cx in 0...cWid)
-				for(cy in 0...cHei) {
-					var newCx = cx + cDeltaX;
-					var newCy = cy + cDeltaY;
-					var newCoordId = newCx + newCy * newCWid;
-					if( old.exists(coordId(cx,cy)) && newCx>=0 && newCx<newCWid && newCy>=0 && newCy<newCHei )
-						intGrid.set( newCoordId, old.get(coordId(cx,cy)) );
+				if( def.isDerivedIntGrid ) {
+					// Derived values are recomputed from rules after a resize
+					intGrid = new Map();
+					recountAllIntGridValues();
+					derivedValuesDirty = true;
+				}
+				else {
+					// Remap coords
+					var old = intGrid;
+					intGrid = new Map();
+					for(cx in 0...cWid)
+					for(cy in 0...cHei) {
+						var newCx = cx + cDeltaX;
+						var newCy = cy + cDeltaY;
+						var newCoordId = newCx + newCy * newCWid;
+						if( old.exists(coordId(cx,cy)) && newCx>=0 && newCx<newCWid && newCy>=0 && newCy<newCHei )
+							intGrid.set( newCoordId, old.get(coordId(cx,cy)) );
+					}
 				}
 
 			case AutoLayer:
@@ -655,6 +678,9 @@ class LayerInstance {
 
 	public function setIntGrid(cx:Int, cy:Int, v:Int, useAsyncRender:Bool) {
 		requireType(IntGrid);
+		if( def.isDerivedIntGrid )
+			return; // Derived values are computed from rules
+
 		if( isValid(cx,cy) ) {
 			if( v>=0 ) {
 				var old = intGrid.get(coordId(cx,cy));
@@ -678,6 +704,9 @@ class LayerInstance {
 
 	public function removeIntGrid(cx:Int, cy:Int, useAsyncRender:Bool) {
 		requireType(IntGrid);
+		if( def.isDerivedIntGrid )
+			return; // Derived values are computed from rules
+
 		if( isValid(cx,cy) && hasIntGrid(cx,cy) ) {
 			decreaseAreaIntGridValueCount( intGrid.get(coordId(cx,cy)), cx, cy );
 			intGrid.remove( coordId(cx,cy) );
@@ -835,14 +864,22 @@ class LayerInstance {
 
 		switch def.type {
 			case IntGrid:
-				var newIntGrid = new Map();
-				for(cy in 0...cHei)
-				for(cx in 0...cWid)
-					if( hasIntGrid(cx,cy) && cx<newCWid && cy<newCHei )
-						newIntGrid.set( _newCoordId(cx,cy), getIntGrid(cx,cy));
-				intGrid = newIntGrid;
-				if( def.isAutoLayer() )
-					autoTilesCache = null;
+				if( def.isDerivedIntGrid ) {
+					// Derived values are recomputed from rules after a grid size change
+					intGrid = new Map();
+					recountAllIntGridValues();
+					derivedValuesDirty = true;
+				}
+				else {
+					var newIntGrid = new Map();
+					for(cy in 0...cHei)
+					for(cx in 0...cWid)
+						if( hasIntGrid(cx,cy) && cx<newCWid && cy<newCHei )
+							newIntGrid.set( _newCoordId(cx,cy), getIntGrid(cx,cy));
+					intGrid = newIntGrid;
+					if( def.isAutoLayer() )
+						autoTilesCache = null;
+				}
 
 			case Entities:
 				var ratio = newGrid/oldGrid;
@@ -893,16 +930,18 @@ class LayerInstance {
 			return !level.getLayerInstance(def.autoTilesKilledByOtherLayerUid).hasAnyGridTile(cx,cy);
 	}
 
-	inline function addRuleTilesAt(r:data.def.AutoLayerRuleDef, cx:Int, cy:Int, flips:Int) {
-		if( isAutoTileCellAllowed(cx,cy) ) {
-			var tileRectIds = r.getRandomTileRectIdsForCoord(seed, cx,cy, flips);
+	inline function addRuleTilesAt(r:data.def.AutoLayerRuleDef, cx:Int, cy:Int, flips:Int, ?forcedTileRectIds:Array<Int>, ?storeCx:Int, ?storeCy:Int) {
+		var tileRectIds = forcedTileRectIds!=null ? forcedTileRectIds : r.getRandomTileRectIdsForCoord(seed, cx,cy, flips);
+		var scx = storeCx!=null ? storeCx : cx;
+		var scy = storeCy!=null ? storeCy : cy;
+		if( tileRectIds.length>0 && isAutoTileCellAllowed(scx,scy) ) {
 			var td = getTilesetDef();
 			var stampInfos = r.tileMode==Single ? null : getRuleStampRenderInfos(r, td, tileRectIds, flips);
 
-			if( !autoTilesCache.get(r.uid).exists( coordId(cx,cy) ) )
-				autoTilesCache.get(r.uid).set( coordId(cx,cy), [] );
+			if( !autoTilesCache.get(r.uid).exists( coordId(scx,scy) ) )
+				autoTilesCache.get(r.uid).set( coordId(scx,scy), [] );
 
-			autoTilesCache.get(r.uid).set( coordId(cx,cy), autoTilesCache.get(r.uid).get( coordId(cx,cy) ).concat(
+			autoTilesCache.get(r.uid).set( coordId(scx,scy), autoTilesCache.get(r.uid).get( coordId(scx,scy) ).concat(
 				tileRectIds.map( (tid)->{
 					return {
 						x: cx*def.gridSize + (stampInfos==null ? 0 : stampInfos.get(tid).xOff ) + r.getXOffsetForCoord(seed,cx,cy, flips),
@@ -941,6 +980,12 @@ class LayerInstance {
 		WARNING: autoTiles clear method should always be called before that one!
 	**/
 	inline function applyRuleAt(sourceLi:LayerInstance, r:data.def.AutoLayerRuleDef, cx:Int, cy:Int) : Bool {
+		// Dual-grid rules: ignore the regular pattern matcher, only the corner mask matters (see applyDualGridRuleAt)
+		if( r.dualGrid ) {
+			applyDualGridRuleAt(sourceLi, r, cx,cy);
+			return true;
+		}
+
 		// Skip rule that requires specific IntGrid values absent from layer
 		if( !r.isRelevantInLayerAt(sourceLi,cx,cy) )
 			return false;
@@ -981,6 +1026,49 @@ class LayerInstance {
 		}
 
 		return matched;
+	}
+
+	/**
+	Apply a dual-grid rule at cell (cx,cy): the top-left corner of this cell is a "dual-grid corner", and the rule
+	renders the tile matching the 0-15 mask of the 4 cells around it (see AutoLayerRuleDef.getDualGridMask).
+	The corners on the right/bottom layer edges are evaluated from the last row/column of cells: their tiles are
+	stored in the clamped last row/column, so that all existing cache consumers keep working.
+	**/
+	function applyDualGridRuleAt(sourceLi:LayerInstance, r:data.def.AutoLayerRuleDef, cx:Int, cy:Int) {
+		// Corner at the top-left of this cell
+		applyDualGridCornerAt(sourceLi, r, cx,cy, cx,cy);
+
+		// Right/bottom edge corners
+		if( cx==cWid-1 )
+			applyDualGridCornerAt(sourceLi, r, cx+1,cy, cx,cy);
+		if( cy==cHei-1 )
+			applyDualGridCornerAt(sourceLi, r, cx,cy+1, cx,cy);
+		if( cx==cWid-1 && cy==cHei-1 )
+			applyDualGridCornerAt(sourceLi, r, cx+1,cy+1, cx,cy);
+	}
+
+	/**
+	Apply a dual-grid rule at one grid corner. `cornerCx/cornerCy` are the corner coords (the corner is the top-left
+	of that cell) and `storeCx/storeCy` is the cache cell used to store the resulting tiles (clamped to the last
+	row/column on layer edges).
+	**/
+	function applyDualGridCornerAt(sourceLi:LayerInstance, r:data.def.AutoLayerRuleDef, cornerCx:Int, cornerCy:Int, storeCx:Int, storeCy:Int) {
+		if( cornerCx<0 || cornerCx>cWid || cornerCy<0 || cornerCy>cHei )
+			return;
+
+		// Chance
+		if( r.chance<=0 || r.chance<1 && dn.M.randSeedCoords(seed+r.uid, cornerCx,cornerCy, 100) >= r.chance*100 )
+			return;
+
+		// Perlin
+		if( !r.isPerlinAllowedAt(seed, cornerCx,cornerCy) )
+			return;
+
+		// Mask & tile
+		var mask = r.getDualGridMask(sourceLi, cornerCx, cornerCy);
+		var tids = r.getDualGridTileRectIdsForMask(seed, mask, cornerCx, cornerCy);
+		if( tids.length>0 )
+			addRuleTilesAt(r, cornerCx,cornerCy, 0, tids, storeCx,storeCy);
 	}
 
 
@@ -1040,6 +1128,9 @@ class LayerInstance {
 	}
 
 	public function applyBreakOnMatchesArea(cx:Int, cy:Int, wid:Int, hei:Int) {
+		if( autoTilesCache==null )
+			return;
+
 		var left = M.imax(0,cx);
 		var top = M.imax(0,cy);
 		var right = M.imin(cWid-1, left + wid-1);
@@ -1051,6 +1142,11 @@ class LayerInstance {
 		for( y in top...bottom+1 )
 		for( x in left...right+1 ) {
 			def.iterateActiveRulesInEvalOrder( this, (r)->{
+				// Dual-grid rules don't take part in the break-on-match mechanism: their tiles are anchored at grid
+				// corners (and shared by up to 4 cells), so they neither lock nor get discarded
+				if( r.dualGrid )
+					return;
+
 				if( autoTilesCache.exists(r.uid) && autoTilesCache.get(r.uid).exists(coordId(x,y)) ) {
 					if( coordLocks.exists( coordId(x,y) ) ) {
 						// Tiles below locks are discarded
@@ -1077,6 +1173,9 @@ class LayerInstance {
 
 	/** Apply all rules to specific cell **/
 	public function applyAllRulesAt(cx:Int, cy:Int, wid:Int, hei:Int) {
+		if( def.isDerived() )
+			return;
+
 		if( !def.autoLayerRulesCanBeUsed() ) {
 			clearAllAutoTilesCache();
 			return;
@@ -1087,6 +1186,10 @@ class LayerInstance {
 			clearAllAutoTilesCache();
 			return;
 		}
+
+		// Make sure a derived IntGrid source is up-to-date
+		if( source.def.isDerived() && source.derivedValuesDirty )
+			source.applyAllDerivedRules();
 
 		if( autoTilesCache==null ) {
 			applyAllRules();
@@ -1133,15 +1236,19 @@ class LayerInstance {
 		}
 
 		var source = def.type==IntGrid ? this : def.autoSourceLayerDefUid!=null ? level.getLayerInstance(def.autoSourceLayerDefUid) : null;
-		if( source==null || !r.isRelevantInLayer(source) )
+		if( source==null || !r.dualGrid && !r.isRelevantInLayer(source) ) // NOTE: dual-grid rules always run (their mask-0 tile can cover the whole layer)
 			return;
+
+		// Make sure a derived IntGrid source is up-to-date
+		if( source.def.isDerived() && source.derivedValuesDirty )
+			source.applyAllDerivedRules();
 
 		clearAutoTilesCacheByRule(r);
 
 		if( def.autoLayerRulesCanBeUsed() ) {
 			for( ay in 0...Std.int(cHei/intGridAreaSize)+1 )
 			for( ax in 0...Std.int(cWid/intGridAreaSize)+1 ) {
-				if( !r.isRelevantInLayerAt(source, ax*intGridAreaSize, ay*intGridAreaSize) )
+				if( !r.dualGrid && !r.isRelevantInLayerAt(source, ax*intGridAreaSize, ay*intGridAreaSize) )
 					continue;
 
 				for(cx in ax*intGridAreaSize...(ax+1)*intGridAreaSize)
@@ -1153,6 +1260,228 @@ class LayerInstance {
 			if( applyBreakOnMatch )
 				applyBreakOnMatchesEverywhere();
 		}
+	}
+
+
+	/** DERIVED INT GRID *******************/
+
+	/** Recompute all values of this derived IntGrid layer (no-op on other layer types) **/
+	public function applyAllDerivedRules() {
+		if( !def.isDerived() )
+			return;
+
+		computeDerivedValues(0, 0, cWid, cHei, new Map());
+	}
+
+	/** Compute derived values now if they are out-of-date (no-op on other layers). Lazy entry point for exporters/renderers. **/
+	public inline function refreshDerivedValues() {
+		if( def.isDerived() && derivedValuesDirty )
+			applyAllDerivedRules();
+	}
+
+	/** Recompute this derived IntGrid layer values in a specific area (no-op on other layer types) **/
+	public function applyDerivedRulesAt(cx:Int, cy:Int, wid:Int, hei:Int) {
+		if( !def.isDerived() )
+			return;
+
+		computeDerivedValues(cx, cy, wid, hei, new Map());
+	}
+
+	function computeDerivedValues(left:Int, top:Int, wid:Int, hei:Int, visited:Map<Int,Bool>) {
+		if( !def.isDerived() )
+			return;
+
+		// Cycle guard
+		if( visited.exists(layerDefUid) ) {
+			App.LOG.error('Cyclic derived IntGrid source chain detected in $this');
+			return;
+		}
+		visited.set(layerDefUid, true);
+
+		// Resolve source layer
+		var source : Null<LayerInstance> = def.autoSourceLayerDefUid==null ? null : level.getLayerInstance(def.autoSourceLayerDefUid);
+		if( source!=null && source.def.type!=IntGrid )
+			source = null;
+
+		if( source==null ) {
+			// Invalid source: this layer stays empty
+			if( derivedValuesDirty ) {
+				intGrid = new Map();
+				recountAllIntGridValues();
+				derivedValuesDirty = false;
+			}
+			return;
+		}
+
+		// Whole layer recompute if it was marked as dirty
+		if( derivedValuesDirty ) {
+			left = 0;
+			top = 0;
+			wid = cWid;
+			hei = cHei;
+		}
+
+		// An upstream derived layer must be computed first (NOTE: `visited` is shared to guard against cyclic chains).
+		// Its values for the same area are refreshed even when it isn't flagged dirty, as the layer order in the level
+		// doesn't guarantee that it was already recomputed by the current invalidation pass.
+		if( source.def.isDerived() ) {
+			if( source.derivedValuesDirty )
+				source.computeDerivedValues(0, 0, source.cWid, source.cHei, visited);
+			else
+				source.computeDerivedValues(left, top, wid, hei, visited);
+
+			if( source.derivedValuesDirty ) {
+				// Couldn't compute the source (cycle or missing source): retry later
+				derivedValuesDirty = true;
+				return;
+			}
+		}
+
+		if( cWid<=0 || cHei<=0 ) {
+			derivedValuesDirty = false;
+			return;
+		}
+
+		// Expand the area to take pattern radius and output offsets into account.
+		// - the CLEAR area covers every cell whose value could be affected by the change,
+		// - the EVAL area is larger: it also covers every match whose output might land inside the CLEAR area,
+		//   so that all writers of a cleared cell are always re-evaluated (see writeDerivedValue restrictions).
+		var maxRadius = Std.int( Const.MAX_AUTO_PATTERN_SIZE*0.5 );
+		var maxOutputOffset = 0;
+		def.iterateActiveRulesInEvalOrder( this, (r)->{
+			if( r.hasOutputValues() )
+				maxOutputOffset = M.imax(maxOutputOffset, r.getMaxOutputOffset());
+		});
+
+		var clearLeft = M.imax(0, left-maxRadius-maxOutputOffset);
+		var clearTop = M.imax(0, top-maxRadius-maxOutputOffset);
+		var clearRight = M.imin(cWid-1, left+wid-1+maxRadius+maxOutputOffset);
+		var clearBottom = M.imin(cHei-1, top+hei-1+maxRadius+maxOutputOffset);
+
+		var evalLeft = M.imax(0, left-maxRadius-2*maxOutputOffset);
+		var evalTop = M.imax(0, top-maxRadius-2*maxOutputOffset);
+		var evalRight = M.imin(cWid-1, left+wid-1+maxRadius+2*maxOutputOffset);
+		var evalBottom = M.imin(cHei-1, top+hei-1+maxRadius+2*maxOutputOffset);
+
+		// Clear the area: all its values are recomputed below
+		for(cy in clearTop...clearBottom+1)
+		for(cx in clearLeft...clearRight+1)
+			_setDerivedIntGridRaw(cx, cy, 0);
+
+		// Apply all rules in evaluation order
+		var locks = new Map<Int,Bool>();
+		def.iterateActiveRulesInEvalOrder( this, (r)->{
+			if( !r.hasOutputValues() )
+				return;
+
+			for(cy in evalTop...evalBottom+1)
+			for(cx in evalLeft...evalRight+1)
+				applyDerivedRuleAt(source, r, cx, cy, clearLeft, clearTop, clearRight, clearBottom, locks);
+		});
+
+		derivedValuesDirty = false;
+	}
+
+	/** Internal write helper: updates the IntGrid usage counts, without going through the public (undoable) API **/
+	function _setDerivedIntGridRaw(cx:Int, cy:Int, v:Int) {
+		var cid = coordId(cx,cy);
+		var old = intGrid.exists(cid) ? intGrid.get(cid) : 0;
+		if( old==v )
+			return;
+
+		if( old!=0 )
+			decreaseAreaIntGridValueCount(old, cx, cy);
+
+		if( v==0 )
+			intGrid.remove(cid);
+		else
+			intGrid.set(cid, v);
+
+		if( v!=0 )
+			increaseAreaIntGridValueCount(v, cx, cy);
+	}
+
+	/** Check & apply given rule at coord, writing its output value(s) to the destination cell **/
+	inline function applyDerivedRuleAt(sourceLi:LayerInstance, r:data.def.AutoLayerRuleDef, cx:Int, cy:Int, clearLeft:Int, clearTop:Int, clearRight:Int, clearBottom:Int, locks:Map<Int,Bool>) : Bool {
+		// NOTE: unlike auto-layer tiles, `r.isRelevantInLayerAt` is NOT used here: it relies on coarse
+		// area counters that are not covered by the incremental recompute window.
+
+		// Modulos
+		if( r.checker!=Vertical && (cy-r.yOffset) % r.yModulo!=0 )
+			return false;
+
+		if( r.checker==Vertical && ( cy + ( Std.int(cx/r.xModulo)%2 ) )%r.yModulo!=0 )
+			return false;
+
+		if( r.checker!=Horizontal && (cx-r.xOffset) % r.xModulo!=0 )
+			return false;
+
+		if( r.checker==Horizontal && ( cx + ( Std.int(cy/r.yModulo)%2 ) )%r.xModulo!=0 )
+			return false;
+
+		// Apply rule
+		var matched = false;
+		if( r.matches(this, sourceLi, cx,cy) ) {
+			writeDerivedValues(r, cx,cy, 0, clearLeft, clearTop, clearRight, clearBottom, locks);
+			matched = true;
+		}
+
+		if( ( !matched || !r.breakOnMatch ) && r.flipX && r.matches(this, sourceLi, cx,cy, -1) ) {
+			writeDerivedValues(r, cx,cy, 1, clearLeft, clearTop, clearRight, clearBottom, locks);
+			matched = true;
+		}
+
+		if( ( !matched || !r.breakOnMatch ) && r.flipY && r.matches(this, sourceLi, cx,cy, 1, -1) ) {
+			writeDerivedValues(r, cx,cy, 2, clearLeft, clearTop, clearRight, clearBottom, locks);
+			matched = true;
+		}
+
+		if( ( !matched || !r.breakOnMatch ) && r.flipX && r.flipY && r.matches(this, sourceLi, cx,cy, -1, -1) ) {
+			writeDerivedValues(r, cx,cy, 3, clearLeft, clearTop, clearRight, clearBottom, locks);
+			matched = true;
+		}
+
+		return matched;
+	}
+
+	/** Write the output values of a matching rule to their offset destination cells (a rule can have several outputs) **/
+	inline function writeDerivedValues(r:data.def.AutoLayerRuleDef, cx:Int, cy:Int, flips:Int, clearLeft:Int, clearTop:Int, clearRight:Int, clearBottom:Int, locks:Map<Int,Bool>) : Bool {
+		var wrote = false;
+		var selfWritten = new Map<Int,Bool>(); // cells already written by the current rule's own outputs
+		var oIdx = -1;
+		for(o in r.outputs) {
+			oIdx++;
+			if( o.isEmpty() )
+				continue;
+
+			var tx = cx + o.offsetX;
+			var ty = cy + o.offsetY;
+
+			// Only cells of the recomputed area can be written: this guarantees that no value outside of it is
+			// overwritten by a partially evaluated match. Out-of-area writes leave the cell unlocked.
+			if( !isValid(tx,ty) || tx<clearLeft || tx>clearRight || ty<clearTop || ty>clearBottom )
+				continue;
+
+			var targetCoordId = coordId(tx,ty);
+			if( locks.exists(targetCoordId) )
+				continue; // cell is locked by a previous break-on-match rule
+
+			if( selfWritten.exists(targetCoordId) )
+				continue; // another output of the same rule already wrote this cell: the first one wins
+
+			var v = r.getRandomOutputValueForCoord(o, oIdx, seed, cx,cy, flips);
+			if( v!=0 && !def.hasIntGridValue(v) )
+				continue; // unknown value: ignore
+
+			_setDerivedIntGridRaw(tx, ty, v); // 0 means "no value"
+			selfWritten.set(targetCoordId, true);
+
+			if( r.breakOnMatch )
+				locks.set( targetCoordId, true );
+
+			wrote = true;
+		}
+		return wrote;
 	}
 
 }

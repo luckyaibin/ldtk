@@ -144,7 +144,11 @@ class LevelRender extends dn.Process {
 
 			case LevelResized(l):
 				for(li in l.layerInstances)
-					if( li.def.isAutoLayer() )
+					if( li.def.isDerived() ) {
+						li.derivedValuesDirty = true;
+						li.applyAllDerivedRules();
+					}
+					else if( li.def.isAutoLayer() )
 						li.applyAllRules();
 				invalidateAll();
 
@@ -205,36 +209,52 @@ class LevelRender extends dn.Process {
 
 			case LayerRuleChanged(r):
 				var li = editor.curLevel.getLayerInstanceFromRule(r);
-				li.applyRuleToFullLayer(r, true);
+				if( li.def.isDerived() )
+					li.derivedValuesDirty = true;
+				else
+					li.applyRuleToFullLayer(r, true);
 				invalidateLayer(li);
 
 			case LayerRuleSeedChanged:
+				markDerivedDirty(editor.curLayerInstance);
 				invalidateLayer( editor.curLayerInstance );
 
 			case LayerRuleSorted:
+				markDerivedDirty(editor.curLayerInstance);
 				invalidateLayer( editor.curLayerInstance );
 
 			case LayerRuleRemoved(r,invalidates):
 				if( invalidates ) {
 					var li = editor.curLevel.getLayerInstanceFromRule(r);
-					invalidateLayer( li==null ? editor.curLayerInstance : li );
+					if( li==null )
+						li = editor.curLayerInstance;
+					markDerivedDirty(li);
+					invalidateLayer(li);
 				}
 
 			case LayerRuleGroupAdded(rg):
-				if( rg.rules.length>0 )
+				if( rg.rules.length>0 ) {
+					markDerivedDirty(editor.curLayerInstance);
 					invalidateLayer(editor.curLayerInstance);
+				}
 
 			case LayerRuleGroupRemoved(rg):
-				editor.curLayerInstance.applyAllRules();
+				if( editor.curLayerInstance.def.isDerived() )
+					editor.curLayerInstance.derivedValuesDirty = true;
+				else
+					editor.curLayerInstance.applyAllRules();
 				invalidateLayer( editor.curLayerInstance );
 
 			case LayerRuleGroupChanged(rg):
+				markDerivedDirty(editor.curLayerInstance);
 				invalidateLayer( editor.curLayerInstance );
 
 			case LayerRuleGroupChangedActiveState(rg):
+				markDerivedDirty(editor.curLayerInstance);
 				invalidateLayer( editor.curLayerInstance );
 
 			case LayerRuleGroupSorted:
+				markDerivedDirty(editor.curLayerInstance);
 				invalidateLayer( editor.curLayerInstance );
 
 			case LayerRuleGroupCollapseChanged(rg):
@@ -650,18 +670,43 @@ class LevelRender extends dn.Process {
 		}
 	}
 
-	public inline function invalidateLayer(?li:data.inst.LayerInstance, ?layerDefUid:Int, evaluateRules=true) {
-		if( li==null )
-			li = editor.curLevel.getLayerInstance(layerDefUid);
-		layerInvalidations.set( li.layerDefUid, { evaluateRules:evaluateRules, left:0, right:li.cWid-1, top:0, bottom:li.cHei-1 } );
-
-		if( li.def.type==IntGrid )
-			for(l in editor.curLevel.layerInstances)
-				if( l.def.type==AutoLayer && l.def.autoSourceLayerDefUid==li.def.uid )
-					invalidateLayer(l);
+	/** Derived IntGrid layers are fully recomputed whenever their rules change **/
+	inline function markDerivedDirty(li:data.inst.LayerInstance) {
+		if( li.def.isDerived() )
+			li.derivedValuesDirty = true;
 	}
 
-	public inline function invalidateLayerArea(li:data.inst.LayerInstance, left:Int, right:Int, top:Int, bottom:Int, evaluateRules=true) {
+	public function invalidateLayer(?li:data.inst.LayerInstance, ?layerDefUid:Int, evaluateRules=true) {
+		if( li==null )
+			li = editor.curLevel.getLayerInstance(layerDefUid);
+		invalidateLayerRecursive(li, evaluateRules, new Map());
+	}
+
+	function invalidateLayerRecursive(li:data.inst.LayerInstance, evaluateRules:Bool, visited:Map<Int,Bool>) {
+		if( visited.exists(li.layerDefUid) )
+			return;
+
+		visited.set(li.layerDefUid, true);
+
+		layerInvalidations.set( li.layerDefUid, { evaluateRules:evaluateRules, left:0, right:li.cWid-1, top:0, bottom:li.cHei-1 } );
+
+		// Invalidate linked auto-layers and derived IntGrid layers
+		if( li.def.type==IntGrid )
+			for(l in editor.curLevel.layerInstances)
+				if( ( l.def.type==AutoLayer || l.def.isDerived() ) && l.def.autoSourceLayerDefUid==li.def.uid )
+					invalidateLayerRecursive(l, evaluateRules, visited);
+	}
+
+	public function invalidateLayerArea(li:data.inst.LayerInstance, left:Int, right:Int, top:Int, bottom:Int, evaluateRules=true) {
+		invalidateLayerAreaRecursive(li, left, right, top, bottom, evaluateRules, new Map());
+	}
+
+	function invalidateLayerAreaRecursive(li:data.inst.LayerInstance, left:Int, right:Int, top:Int, bottom:Int, evaluateRules:Bool, visited:Map<Int,Bool>) {
+		if( visited.exists(li.layerDefUid) )
+			return;
+
+		visited.set(li.layerDefUid, true);
+
 		if( layerInvalidations.exists(li.layerDefUid) ) {
 			var bounds = layerInvalidations.get(li.layerDefUid);
 			bounds.left = M.imin(bounds.left, left);
@@ -673,17 +718,17 @@ class LevelRender extends dn.Process {
 		else
 			layerInvalidations.set( li.layerDefUid, { evaluateRules:evaluateRules, left:left, right:right, top:top, bottom:bottom } );
 
-		// Invalidate linked auto-layers
+		// Invalidate linked auto-layers and derived IntGrid layers
 		if( li.def.type==IntGrid )
 			for(other in editor.curLevel.layerInstances)
-				if( other.def.type==AutoLayer && other.def.autoSourceLayerDefUid==li.layerDefUid )
-					invalidateLayerArea(other, left, right, top, bottom);
+				if( ( other.def.type==AutoLayer || other.def.isDerived() ) && other.def.autoSourceLayerDefUid==li.layerDefUid )
+					invalidateLayerAreaRecursive(other, left, right, top, bottom, evaluateRules, visited);
 
 		// Invalidate potentially killed auto-layers
 		if( li.def.type==Tiles )
 			for(other in editor.curLevel.layerInstances)
 				if( other.def.isAutoLayer() && other.def.autoTilesKilledByOtherLayerUid==li.layerDefUid )
-					invalidateLayerArea(other, left, right, top, bottom);
+					invalidateLayerAreaRecursive(other, left, right, top, bottom, evaluateRules, visited);
 	}
 
 	public inline function invalidateUiAndBg() {
@@ -756,8 +801,15 @@ class LevelRender extends dn.Process {
 						if( li.def.useAsyncRender || li.def.autoSourceLayerDefUid!=null && li.def.autoSourceLd.useAsyncRender )
 							continue;
 					var inv = layerInvalidations.get(li.layerDefUid);
-					if( li.def.isAutoLayer() && inv.evaluateRules )
-						li.applyAllRulesAt( inv.left, inv.top, inv.right-inv.left+1, inv.bottom-inv.top+1 );
+					if( inv.evaluateRules )
+						if( li.def.isDerived() ) {
+							if( li.derivedValuesDirty )
+								li.applyAllDerivedRules();
+							else
+								li.applyDerivedRulesAt( inv.left, inv.top, inv.right-inv.left+1, inv.bottom-inv.top+1 );
+						}
+						else if( li.def.isAutoLayer() )
+							li.applyAllRulesAt( inv.left, inv.top, inv.right-inv.left+1, inv.bottom-inv.top+1 );
 					renderLayer(li);
 				}
 		}

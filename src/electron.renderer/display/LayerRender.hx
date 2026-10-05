@@ -80,7 +80,15 @@ class LayerRender {
 		tg.addTransform(tx, ty, sx, sy, 0, t);
 	}
 
+	/** Derived IntGrid: compute values lazily, only when needed **/
+	inline function refreshDerivedValues(li:data.inst.LayerInstance) {
+		if( li.def.isDerived() && li.derivedValuesDirty )
+			li.applyAllDerivedRules();
+	}
+
 	public function render(li:data.inst.LayerInstance, renderAutoLayers=true, ?target:h2d.Object) {
+		refreshDerivedValues(li);
+
 		// Cleanup
 		if( root!=null )
 			clear();
@@ -282,6 +290,7 @@ class LayerRender {
 
 				// Export IntGrid as pixel tiny image
 				if( li.def.type==IntGrid ) {
+					refreshDerivedValues(li);
 					var pixels = hxd.Pixels.alloc(li.cWid, li.cHei, RGBA);
 					for(cy in 0...li.cHei)
 					for(cx in 0...li.cWid) {

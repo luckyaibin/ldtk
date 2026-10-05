@@ -577,6 +577,7 @@ class Level {
 
 	function createLayerInstance(ld:data.def.LayerDef) : data.inst.LayerInstance {
 		var li = new data.inst.LayerInstance(_project, this.uid, ld.uid, _project.generateUniqueId_UUID());
+		li.derivedValuesDirty = ld.isDerived(); // Derived IntGrid values are computed from rules (see LayerInstance.applyAllDerivedRules)
 		layerInstances.push(li);
 		return li;
 	}

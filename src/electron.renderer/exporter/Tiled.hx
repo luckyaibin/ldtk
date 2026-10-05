@@ -302,6 +302,9 @@ class Tiled extends Exporter {
 
 			switch ld.type {
 				case IntGrid:
+					// Derived IntGrid: make sure values are computed before exporting
+					li.refreshDerivedValues();
+
 					// Prepare CSV
 					var csv = new Csv(li.cWid, li.cHei);
 					for(cy in 0...li.cHei)

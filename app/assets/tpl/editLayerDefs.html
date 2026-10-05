@@ -201,6 +201,35 @@
 
 
 		<dt class="IntGrid">
+			<label for="derivedIntGrid">Derived IntGrid</label>
+			<info>
+				If enabled, the values of this layer are NOT painted manually: they are computed by this layer's rules, based on another IntGrid layer (the "source").
+				Each rule reads the source value &amp; coordinates, then writes IntGrid values in a cell at a given offset.
+				Disabling this option will "bake" the current computed values as regular hand-painted values.
+			</info>
+		</dt>
+		<dd class="IntGrid">
+			<label for="derivedIntGrid">
+				<input type="checkbox" name="derivedIntGrid" class="small" id="derivedIntGrid"/>
+				Compute values from rules &amp; another IntGrid layer
+			</label>
+		</dd>
+
+
+		<dt class="DerivedIntGrid">
+			<label>Derived source</label>
+			<info>
+				The IntGrid layer used as a source of values &amp; coordinates when running this layer's rules.
+				Note: this layer will always use the same grid size as its source.
+			</info>
+		</dt>
+		<dd class="DerivedIntGrid">
+			<select name="derivedSource"></select>
+			<div class="help">This derived layer will run its rules on the INTGRID layer selected above.</div>
+		</dd>
+
+
+		<dt class="IntGrid">
 			<label>Values interface icons</label>
 			<info>You may associate custom interface icons to each value. These icons are only used for the UI, not for actual rendering. To render values as tiles in your level, use Auto-Layer below.</info>
 		</dt>
@@ -261,7 +290,7 @@
 		</dd>
 
 
-		<dt class="IntGrid AutoLayer">
+		<dt class="IntGrid AutoLayer autoLayerOnly">
 			<label>Auto-layer tileset</label>
 			<info>
 				Selecting a Tileset here will enable all Auto-Layer rendering capabilities for this layer.
@@ -269,16 +298,16 @@
 			</info>
 		</dt>
 		<dd class="IntGrid AutoLayer">
-			<select name="autoTileset"></select>
+			<select name="autoTileset" class="autoLayerOnly"></select>
 			<button class="editAutoRules">Edit rules</button>
 		</dd>
 
 
-		<dt class="AutoLayer IntGridAutoLayer">
+		<dt class="AutoLayer IntGridAutoLayer autoLayerOnly">
 			<label>Kill tiles</label>
 			<info>If the selected Tile layer contains any tiles, this auto-layer won't draw anything under them.</info>
 		</dt>
-		<dd class="AutoLayer IntGridAutoLayer">
+		<dd class="AutoLayer IntGridAutoLayer autoLayerOnly">
 			<select name="autoKillLayer"></select>
 		</dd>
 

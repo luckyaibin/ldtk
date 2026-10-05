@@ -398,6 +398,11 @@ class Editor extends Page {
 					label: l.identifier+"."+li.def.identifier,
 					cb: li.applyAllRules,
 				});
+			else if( li.def.isDerived() && li.derivedValuesDirty )
+				ops.push({
+					label: l.identifier+"."+li.def.identifier,
+					cb: li.applyAllDerivedRules,
+				});
 
 		if( ops.length>0 )
 			new ui.modal.Progress("Updating auto-layers...", ops, onDone.bind(true));
@@ -923,7 +928,7 @@ class Editor extends Page {
 		if( !allLayerTools.exists(curLayerDef.uid) ) {
 			var t : tool.LayerTool<Dynamic> = switch curLayerDef.type {
 				case AutoLayer: new tool.lt.DoNothing();
-				case IntGrid: new tool.lt.IntGridTool();
+				case IntGrid: curLayerDef.isDerivedIntGrid ? new tool.lt.DoNothing() : new tool.lt.IntGridTool();
 				case Entities: new tool.lt.EntityTool();
 				case Tiles: new tool.lt.TileTool();
 			}
@@ -1006,7 +1011,7 @@ class Editor extends Page {
 
 			switch li.def.type {
 				case IntGrid:
-					if( li.getIntGrid(m.cx,m.cy)>0 )
+					if( !li.def.isDerivedIntGrid && li.getIntGrid(m.cx,m.cy)>0 )
 						ge = GenericLevelElement.GridCell( li, m.cx, m.cy );
 
 				case AutoLayer:
@@ -1603,7 +1608,10 @@ class Editor extends Page {
 			for(w in project.worlds)
 			for(l in w.levels)
 			for(li in l.layerInstances)
-				li.autoTilesCache = null;
+				if( li.def.isDerived() )
+					li.derivedValuesDirty = true;
+				else
+					li.autoTilesCache = null;
 
 			checkAutoLayersCache( (_)->{
 				N.success("Done");
@@ -1614,10 +1622,24 @@ class Editor extends Page {
 	}
 
 
+	/**
+		Flag all derived IntGrid layers of the whole project as needing a recompute.
+		Values will be lazily recomputed when needed (rendering, export, etc.).
+	**/
+	public function markAllDerivedLayersDirty() {
+		for(w in project.worlds)
+		for(l in w.levels)
+		for(li in l.layerInstances)
+			if( li.def.isDerived() )
+				li.derivedValuesDirty = true;
+	}
+
+
 
 	public function applyInvalidatedRulesInAllLevels() {
 		var ops = [];
 		var affectedLayers : Map<data.inst.LayerInstance,data.Level> = new Map();
+		var derivedDone : Map<data.inst.LayerInstance,Bool> = new Map();
 
 		for(ld in project.defs.layers)
 		for(rg in ld.autoRuleGroups)
@@ -1631,7 +1653,18 @@ class Editor extends Page {
 
 				r.invalidated = false;
 
-				if( li.autoTilesCache==null ) {
+				if( li.def.isDerived() ) {
+					// Derived IntGrid layers are fully recomputed
+					if( !derivedDone.exists(li) ) {
+						derivedDone.set(li,true);
+						affectedLayers.set(li,l);
+						ops.push({
+							label: 'Recomputing derived IntGrid ${l.identifier}.${li.def.identifier}',
+							cb: ()->{ li.derivedValuesDirty = true; li.applyAllDerivedRules(); }
+						});
+					}
+				}
+				else if( li.autoTilesCache==null ) {
 					// Run all rules
 					ops.push({
 						label: 'Initializing autoTiles cache in ${l.identifier}.${li.def.identifier}',
@@ -1656,6 +1689,9 @@ class Editor extends Page {
 		var affectedLevels : Map<data.Level, Bool> = new Map();
 		for(li in affectedLayers.keys()) {
 			affectedLevels.set( affectedLayers.get(li), true );
+			if( li.def.isDerived() )
+				continue; // derived IntGrid layers have no auto-tiles cache
+
 			ops.push({
 				label: 'Applying break on matches on ${affectedLayers.get(li).identifier}.${li.def.identifier}',
 				cb: li.applyBreakOnMatchesEverywhere.bind(),
@@ -2426,6 +2462,8 @@ class Editor extends Page {
 
 			case LayerDefChanged(defUid, contentInvalidated):
 				project.defs.initFastAccesses();
+				if( contentInvalidated )
+					markAllDerivedLayersDirty();
 				if( curLayerDef==null && project.defs.layers.length>0 )
 					selectLayerInstance( curLevel.getLayerInstance(project.defs.layers[0]) );
 				resetTools();
@@ -2440,6 +2478,7 @@ class Editor extends Page {
 
 			case LayerDefIntGridValuesSorted(defUid,groupChanged):
 				updateTool();
+				markAllDerivedLayersDirty();
 				if( groupChanged ) {
 					project.recountIntGridValuesInAllLayerInstances();
 					addPendingRebuildAutoLayers();
@@ -2450,6 +2489,7 @@ class Editor extends Page {
 
 			case LayerDefIntGridValueRemoved(_):
 				updateTool();
+				markAllDerivedLayersDirty();
 
 			case WorldSettingsChanged:
 				updateWorldList();
@@ -2570,8 +2610,10 @@ class Editor extends Page {
 		else if( curLayerDef!=null ) {
 			switch curLayerDef.type {
 				case IntGrid:
-					_createGuideBlock([K.SHIFT], "mouseLeft", L.t._("Rectangle"));
-					_createGuideBlock([K.ALT], "mouseLeft", L.t._("Pick"));
+					if( !curLayerDef.isDerivedIntGrid ) {
+						_createGuideBlock([K.SHIFT], "mouseLeft", L.t._("Rectangle"));
+						_createGuideBlock([K.ALT], "mouseLeft", L.t._("Pick"));
+					}
 
 				case AutoLayer:
 
@@ -2776,7 +2818,7 @@ class Editor extends Page {
 
 			// Rules button
 			var jRules = jLi.find(".rules");
-			if( li.def.isAutoLayer() )
+			if( li.def.isAutoLayer() || li.def.derivedRulesCanBeUsed() )
 				jRules.show();
 			else
 				jRules.hide();
@@ -2830,7 +2872,7 @@ class Editor extends Page {
 					label: L.t._("Edit rules"),
 					iconId: "rule",
 					cb: ()->jRules.click(),
-					show: ()->li.def.isAutoLayer(),
+					show: ()->li.def.isAutoLayer() || li.def.derivedRulesCanBeUsed(),
 				},
 				{
 					label: L.t._("Edit layer settings"),

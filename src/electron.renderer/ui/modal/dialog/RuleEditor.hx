@@ -19,7 +19,9 @@ class RuleEditor extends ui.modal.Dialog {
 		setTransparentMask();
 		this.layerDef = layerDef;
 		this.rule = rule;
-		sourceDef = layerDef.type==IntGrid ? layerDef : project.defs.getLayerDef( layerDef.autoSourceLayerDefUid );
+		sourceDef = layerDef.type==IntGrid && !layerDef.isDerived() ? layerDef : project.defs.getLayerDef( layerDef.autoSourceLayerDefUid );
+		if( sourceDef==null )
+			sourceDef = layerDef; // Safety fallback (eg. missing source layer)
 
 		// Smart pick current IntGrid value
 		curValue = -1;
@@ -98,9 +100,183 @@ class RuleEditor extends ui.modal.Dialog {
 	}
 
 
+	/** Toggle the dual-grid mode. Only meaningful on layers rendering tiles (not derived ones). **/
+	function setDualGrid(on:Bool) {
+		rule.dualGrid = on;
+		if( on ) {
+			// Only the center value is used: clear all the other pattern cells
+			var center = Std.int(rule.size*0.5);
+			for(cy in 0...rule.size)
+			for(cx in 0...rule.size)
+				if( cx!=center || cy!=center )
+					rule.setPattern(cx,cy,0);
+
+			// Default the center value (the "terrain") to the first IntGrid value of the source layer
+			if( rule.getDualGridValue()<0 )
+				for(iv in sourceDef.getAllIntGridValues()) {
+					rule.setPattern(center, center, iv.value);
+					break;
+				}
+			rule.updateUsedValues();
+
+			// Settings that don't make sense in this mode
+			rule.flipX = false;
+			rule.flipY = false;
+			rule.tileMode = Single;
+			rule.xModulo = 1;
+			rule.yModulo = 1;
+			rule.checker = ldtk.Json.AutoLayerRuleCheckerMode.None;
+			rule.xOffset = 0;
+			rule.yOffset = 0;
+			rule.tileRandomXMin = 0;
+			rule.tileRandomXMax = 0;
+			rule.tileRandomYMin = 0;
+			rule.tileRandomYMax = 0;
+			rule.pivotX = 0;
+			rule.pivotY = 0;
+
+			// Default offset: center the tile on the corner = half a TILESET TILE.
+			// Standard dual-grid "windmill" tiles span 2x2 logical cells, so this is usually one full cell.
+			if( rule.tileXOffset==0 && rule.tileYOffset==0 ) {
+				var td = project.defs.getTilesetDef(layerDef.tilesetDefUid);
+				var tileSize = td!=null ? td.tileGridSize : layerDef.gridSize;
+				rule.tileXOffset = -Std.int(tileSize*0.5);
+				rule.tileYOffset = -Std.int(tileSize*0.5);
+			}
+		}
+
+		onAnyRuleChange();
+		renderAll();
+	}
+
+
+	/**
+	Dual-grid mode: one tile per 0-15 mask of the 4 cells around a grid corner (bit 1=NW, 2=NE, 4=SW, 8=SE).
+	The tile for each mask is picked here.
+	**/
+	function updateDualGridSettings() {
+		var jSettings = jContent.find(".dualGridSettings");
+		jSettings.off();
+		var jSlots = jSettings.find(".maskSlots").empty();
+
+		var td = project.defs.getTilesetDef(layerDef.tilesetDefUid);
+		if( td==null ) {
+			jSlots.append('<div class="error">Invalid tileset</div>');
+			return;
+		}
+
+		for(mask in 0...Const.DUAL_GRID_MASK_COUNT) {
+			var tids = mask<rule.tileRectsIds.length ? rule.tileRectsIds[mask] : [];
+
+			var jSlot = new J('<div class="maskSlot"/>');
+			jSlot.appendTo(jSlots);
+
+			// Quadrant diagram: which of the 4 corner cells are covered by this mask
+			var jDiag = new J('<div class="diagram"/>');
+			jDiag.appendTo(jSlot);
+			for(bit in 0...4) {
+				var jQ = new J('<span class="q"/>');
+				if( M.hasBit(mask,bit) )
+					jQ.addClass("on");
+				jQ.appendTo(jDiag);
+			}
+
+			// Tile (if any)
+			if( tids.length>0 )
+				jSlot.append( td.createTileHtmlImageFromTileId(tids[0]) );
+			else
+				jSlot.append('<span class="noTile">-</span>');
+
+			var m = mask;
+			Tip.attach(jSlot, 'Mask $m\nLeft click: pick tile(s) for this mask\nRight click: clear');
+			jSlot.mousedown( (ev:js.jquery.Event)->{
+				switch ev.button {
+					case 0:
+						JsTools.openTilePickerModal(
+							Editor.ME.curLayerInstance.getTilesetUid(),
+							MultipleIndividuals,
+							tids.copy(),
+							false,
+							function(picked) {
+								if( picked.length>0 ) {
+									while( rule.tileRectsIds.length<=m )
+										rule.tileRectsIds.push([]);
+									rule.tileRectsIds[m] = picked.copy();
+									onAnyRuleChange();
+									updateDualGridSettings();
+								}
+							}
+						);
+
+					case 1,2:
+						if( tids.length>0 ) {
+							rule.tileRectsIds[m] = [];
+							onAnyRuleChange();
+							updateDualGridSettings();
+						}
+				}
+			});
+		}
+
+		// Fill all 16 masks from a 4x4 tileset block
+		jSettings.find(".fillFromTileset").click( _->{
+			JsTools.openTilePickerModal(
+				Editor.ME.curLayerInstance.getTilesetUid(),
+				TileRectAndClose,
+				[],
+				false,
+				function(picked) {
+					if( picked.length==0 )
+						return;
+
+					// In a standard dual-grid tileset, the 16 tiles are laid out as x=NW+NE*2, y=SW+SE*2,
+					// ie. the mask of the tile at column bx, row by is bx+by*4
+					var rect = td.getTileRectFromTileIds(picked);
+					var ox = td.xToCx(rect.x), oy = td.yToCy(rect.y);
+					var slots = [];
+					for(i in 0...Const.DUAL_GRID_MASK_COUNT)
+						slots.push([]);
+					var cnt = 0;
+					for(tid in picked) {
+						var bx = td.getTileCx(tid)-ox;
+						var by = td.getTileCy(tid)-oy;
+						if( bx>=0 && bx<4 && by>=0 && by<4 && slots[bx+by*4].length==0 ) {
+							slots[bx+by*4] = [tid];
+							cnt++;
+						}
+					}
+					if( picked.length!=16 || cnt<16 ) {
+						N.error("Please select a full 4x4 tileset block");
+						return;
+					}
+					rule.tileRectsIds = slots;
+					onAnyRuleChange();
+					updateDualGridSettings();
+				}
+			);
+		});
+
+		JsTools.parseComponents(jSettings);
+	}
+
+
 	function updateTileSettings() {
+		if( layerDef.isDerived() )
+			return; // Derived IntGrid layers don't render tiles
+
 		var jTilesSettings = jContent.find(".tileSettings");
 		jTilesSettings.off();
+
+		// Dual-grid toggle
+		var jChk = jContent.find(".dualGridToggle input[name=dualGrid]");
+		jChk.off().prop("checked", rule.dualGrid);
+		jChk.change( function(_) setDualGrid( jChk.prop("checked") ) );
+
+		if( rule.dualGrid ) {
+			updateDualGridSettings();
+			JsTools.parseComponents(jTilesSettings);
+			return;
+		}
 
 		// Tile mode
 		var jModeSelect = jContent.find("select[name=tileMode]");
@@ -218,6 +394,104 @@ class RuleEditor extends ui.modal.Dialog {
 
 
 
+	/**
+		Derived IntGrid layers: a rule can write several cells at once. Every "output" below picks which
+		IntGrid value(s) of THIS layer it writes (if several, one is randomly picked using the layer seed for
+		each matched cell) and the cell offset of its destination.
+	**/
+	function updateOutputSettings() {
+		var jOutput = jContent.find(".outputSettings");
+		jOutput.off();
+
+		var allValues = layerDef.getAllIntGridValues();
+		var jList = jOutput.find(">.outputList").empty();
+
+		if( allValues.length==0 )
+			jList.append('<div class="error">This layer has no IntGrid values: add some in the layer settings!</div>');
+
+		var oIdx = 0;
+		while( oIdx<rule.outputs.length ) {
+			var idx = oIdx;
+			var o = rule.outputs[oIdx];
+			oIdx++;
+
+			var jEntry = new J('<div class="outputEntry"/>');
+			jEntry.appendTo(jList);
+
+			// Value(s) written by this output (from the derived layer's own palette)
+			var jValues = new J('<div class="values"/>');
+			jValues.appendTo(jEntry);
+			for(iv in allValues) {
+				var jVal = new J('<div class="outputValue"/>');
+				jVal.appendTo(jValues);
+				jVal.css("background-color", C.intToHex(iv.color));
+				jVal.append( JsTools.createIntGridValue(project, iv, false) );
+				jVal.append('<span class="name">${iv.identifier!=null ? iv.identifier : Std.string(iv.value)}</span>');
+				jVal.find(".name").css("color", C.intToHex( C.autoContrast(iv.color) ) );
+
+				if( o.values.indexOf(iv.value)>=0 )
+					jVal.addClass("active");
+
+				var v = iv.value;
+				Tip.attach(jVal, "Click to toggle this output value");
+				jVal.click(_->{
+					if( o.values.indexOf(v)>=0 )
+						o.values.remove(v);
+					else
+						o.values.push(v);
+					onAnyRuleChange();
+					updateOutputSettings();
+				});
+			}
+			if( o.values.length==0 )
+				jValues.append('<em class="empty">No value!</em>');
+
+			// Destination cell of this output
+			var jOffsets = new J('<div class="offsets"/>');
+			jOffsets.appendTo(jEntry);
+			jOffsets.append('<span>Write in cell offset:</span>');
+			jOffsets.append('<span>X=</span>');
+			var iX = new form.input.IntInput(
+				new J('<input type="text" class="small" name="outputOffsetX"/>').appendTo(jOffsets),
+				()->o.offsetX,
+				(v)->o.offsetX = v
+			);
+			iX.setBounds(-Const.MAX_RULE_OUTPUT_OFFSET, Const.MAX_RULE_OUTPUT_OFFSET);
+			iX.onChange = ()->onAnyRuleChange();
+			jOffsets.append('<span>Y=</span>');
+			var iY = new form.input.IntInput(
+				new J('<input type="text" class="small" name="outputOffsetY"/>').appendTo(jOffsets),
+				()->o.offsetY,
+				(v)->o.offsetY = v
+			);
+			iY.setBounds(-Const.MAX_RULE_OUTPUT_OFFSET, Const.MAX_RULE_OUTPUT_OFFSET);
+			iY.onChange = ()->onAnyRuleChange();
+			jOffsets.append('<span>cells</span>');
+
+			// Remove this output
+			var jDel = new J('<button class="delete"><span class="icon delete"></span></button>');
+			jDel.appendTo(jEntry);
+			Tip.attach(jDel, "Remove this output");
+			jDel.click(_->{
+				rule.outputs.splice(idx,1);
+				onAnyRuleChange();
+				updateOutputSettings();
+			});
+		}
+
+		// Add a new (empty) output
+		var jAdd = jOutput.find(">.addOutput").off();
+		Tip.attach(jAdd, "Add another cell to write for each match");
+		jAdd.click(_->{
+			rule.outputs.push( new data.def.RuleOutputDef() );
+			onAnyRuleChange();
+			updateOutputSettings();
+		});
+
+		JsTools.parseComponents(jOutput);
+	}
+
+
 	function updateValuePalette() {
 		var jValuePalette = jContent.find(">.pattern .valuePalette>ul").empty();
 
@@ -323,6 +597,19 @@ class RuleEditor extends ui.modal.Dialog {
 	function renderAll() {
 
 		loadTemplate("ruleEditor");
+
+		// Derived IntGrid layers: swap tile settings for output values & offsets
+		if( layerDef.isDerived() )
+			jContent.addClass("derived");
+		else
+			jContent.removeClass("derived");
+
+		// Dual-grid mode: swap the regular tile UI for the 16 mask slots
+		if( rule.dualGrid )
+			jContent.addClass("dualgrid");
+		else
+			jContent.removeClass("dualgrid");
+
 		jContent.find("[data-title],[title]").addClass("disableTip"); // removed on guided mode
 
 		// Mini explanation tip
@@ -335,6 +622,9 @@ class RuleEditor extends ui.modal.Dialog {
 		jContent.find(".debugInfos").text('#${rule.uid}');
 
 		updateTileSettings();
+
+		if( layerDef.isDerived() )
+			updateOutputSettings();
 
 		// Pattern grid editor
 		var patternEditor = new RulePatternEditor(

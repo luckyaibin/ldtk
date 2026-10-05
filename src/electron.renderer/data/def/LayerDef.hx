@@ -45,7 +45,10 @@ class LayerDef {
 	public var autoSourceLayerDefUid : Null<Int>;
 	public var autoRuleGroups : Array<AutoLayerRuleGroupDef> = [];
 	public var autoSourceLd(get,never) : Null<LayerDef>;
-		inline function get_autoSourceLd() return type==AutoLayer && autoSourceLayerDefUid!=null ? _project.defs.getLayerDef(autoSourceLayerDefUid) : null;
+		inline function get_autoSourceLd() return ( type==AutoLayer || isDerived() ) && autoSourceLayerDefUid!=null ? _project.defs.getLayerDef(autoSourceLayerDefUid) : null;
+
+	/** IntGrid layer whose values are computed by rules (editor-only concept, stored in .ldtk as a regular IntGrid) **/
+	public var isDerivedIntGrid = false;
 	public var autoTilesKilledByOtherLayerUid: Null<Int>;
 
 	// Tiles
@@ -150,6 +153,9 @@ class LayerDef {
 
 		o.autoSourceLayerDefUid = JsonTools.readNullableInt(json.autoSourceLayerDefUid);
 
+		// Derived IntGrid layers (editor-only flag, absent from the ldtk.Json.LayerDefJson haxelib definition)
+		o.isDerivedIntGrid = JsonTools.readBool(Reflect.field(json, "isDerivedIntGrid"), false);
+
 		// Read auto-layer rules
 		if( json.autoRuleGroups!=null ) {
 			for( ruleGroupJson in json.autoRuleGroups )
@@ -170,7 +176,7 @@ class LayerDef {
 	}
 
 	public function toJson() : ldtk.Json.LayerDefJson {
-		return {
+		var json : ldtk.Json.LayerDefJson = {
 			__type: Std.string(type),
 
 			identifier: identifier,
@@ -213,7 +219,7 @@ class LayerDef {
 				color: g.color,
 			}),
 
-			autoRuleGroups: isAutoLayer() ? autoRuleGroups.map( (rg)->return rg.toJson(this) ) : [],
+			autoRuleGroups: isAutoLayer() || isDerived() ? autoRuleGroups.map( (rg)->return rg.toJson(this) ) : [],
 			autoSourceLayerDefUid: autoSourceLayerDefUid,
 
 			tilesetDefUid: tilesetDefUid,
@@ -221,7 +227,14 @@ class LayerDef {
 			tilePivotY: tilePivotY,
 
 			biomeFieldUid: biomeFieldUid,
-		}
+		};
+
+		// Derived IntGrid layers: editor-only flag, absent from the ldtk.Json.LayerDefJson haxelib definition.
+		// Only written when true, to avoid adding noise to regular layer defs. Older LDtk versions will ignore it.
+		if( isDerivedIntGrid )
+			Reflect.setField(json, "isDerivedIntGrid", true);
+
+		return json;
 	}
 
 	public inline function getScale() : Float {
@@ -469,7 +482,20 @@ class LayerDef {
 
 
 	public inline function isAutoLayer() {
-		return type==IntGrid && tilesetDefUid!=null || type==AutoLayer;
+		return type==IntGrid && !isDerivedIntGrid && tilesetDefUid!=null || type==AutoLayer;
+	}
+
+	public inline function isDerived() {
+		return type==IntGrid && isDerivedIntGrid;
+	}
+
+	/** Derived IntGrid layer with a valid source: rules can compute its values **/
+	public function derivedRulesCanBeUsed() {
+		if( !isDerived() || autoSourceLayerDefUid==null || autoSourceLayerDefUid==uid )
+			return false;
+
+		var source = _project.defs.getLayerDef(autoSourceLayerDefUid);
+		return source!=null && source.type==IntGrid;
 	}
 
 	public function autoLayerRulesCanBeUsed() {
@@ -678,6 +704,42 @@ class LayerDef {
 		// Lost source intGrid layer
 		if( autoSourceLayerDefUid!=null && p.defs.getLayerDef(autoSourceLayerDefUid)==null )
 			autoSourceLayerDefUid = null;
+
+		// Derived flag is only meaningful on IntGrid layers
+		if( isDerivedIntGrid && type!=IntGrid ) {
+			App.LOG.add("tidy", 'Cleared derived flag of non-IntGrid layer $this');
+			isDerivedIntGrid = false;
+		}
+
+		// Derived IntGrid layers can't use a tileset
+		if( isDerived() && tilesetDefUid!=null ) {
+			App.LOG.add("tidy", 'Removed tileset from derived IntGrid layer $this');
+			tilesetDefUid = null;
+		}
+
+		// Derived IntGrid layers use the same grid as their source
+		if( isDerived() && autoSourceLd!=null && gridSize!=autoSourceLd.gridSize ) {
+			App.LOG.add("tidy", 'Fixed grid size of derived IntGrid layer $this');
+			gridSize = autoSourceLd.gridSize;
+		}
+
+		// Derived IntGrid layers: detect cycles in the source chain (would cause infinite computations)
+		if( isDerived() && autoSourceLayerDefUid!=null ) {
+			var visited = new Map<Int,Bool>();
+			visited.set(uid, true);
+			var prev : LayerDef = this;
+			var cur : Null<LayerDef> = p.defs.getLayerDef(autoSourceLayerDefUid);
+			while( cur!=null ) {
+				if( visited.exists(cur.uid) ) {
+					App.LOG.add("tidy", 'Fixed cyclic source chain in $this');
+					prev.autoSourceLayerDefUid = null;
+					break;
+				}
+				visited.set(cur.uid, true);
+				prev = cur;
+				cur = cur.autoSourceLayerDefUid==null ? null : p.defs.getLayerDef(cur.autoSourceLayerDefUid);
+			}
+		}
 
 		// Lost biome field
 		if( biomeFieldUid!=null && getBiomeEnumDef()==null ) {

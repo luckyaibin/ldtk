@@ -481,6 +481,10 @@ class ProjectSaver extends dn.Process {
 						for( li in l.layerInstances) {
 							if( li.def.type!=IntGrid )
 								continue;
+
+							// Derived IntGrid: make sure values are computed before exporting
+							li.refreshDerivedValues();
+
 							var csv = new exporter.Csv(li.cWid, li.cHei);
 							for(cy in 0...li.cHei)
 							for(cx in 0...li.cWid)

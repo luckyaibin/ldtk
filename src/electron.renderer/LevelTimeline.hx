@@ -171,21 +171,25 @@ class LevelTimeline {
 
 
 	function saveDependentLayers(lis:Array<data.inst.LayerInstance>) {
-		// List dependent layer instances
+		// List dependent layer instances (transitive: source IntGrid -> derived IntGrid -> auto-layers, etc.)
 		var deps = new Map();
-		for(li in lis)
+		var stack = lis.copy();
+		while( stack.length>0 ) {
+			var li = stack.pop();
 			switch li.def.type {
 				case IntGrid:
-					// Auto-layers based on this IntGrid layer
-					for(dli in level.layerInstances) {
-						if( !deps.exists(dli.layerDefUid) && dli.def.type==AutoLayer && dli.def.autoSourceLayerDefUid==li.layerDefUid )
+					// Auto-layers & derived IntGrid layers based on this IntGrid layer
+					for(dli in level.layerInstances)
+						if( !deps.exists(dli.layerDefUid) && ( dli.def.type==AutoLayer || dli.def.isDerived() ) && dli.def.autoSourceLayerDefUid==li.layerDefUid ) {
 							deps.set(dli.layerDefUid, dli);
-					}
+							stack.push(dli);
+						}
 
 				case Entities:
 				case Tiles:
 				case AutoLayer:
 			}
+		}
 
 		// Save dependencies states
 		for(li in deps)

@@ -11,6 +11,9 @@ class EditAllAutoLayerRules extends ui.modal.Panel {
 	public var ld(get,never) : data.def.LayerDef;
 		inline function get_ld() return li.def;
 
+	/** TRUE if the rules of this layer can be used (regular auto-layer or derived IntGrid layer) **/
+	inline function rulesCanBeUsed() return ld.autoLayerRulesCanBeUsed() || ld.derivedRulesCanBeUsed();
+
 
 	public function new(li:data.inst.LayerInstance) {
 		super();
@@ -216,6 +219,12 @@ class EditAllAutoLayerRules extends ui.modal.Panel {
 	function onCreateRule(rg:data.def.AutoLayerRuleGroupDef, insertIdx:Int) {
 		App.LOG.general("Added rule");
 		var r = new data.def.AutoLayerRuleDef( project.generateUniqueId_int() );
+
+		// NB: no output/pattern prefill for derived layers. A new rule with an empty pattern matches
+		// every cell, so prefilling an output value would make it repaint the whole layer on creation.
+		// RuleEditor.close() kills rules that are still empty (see AutoLayerRuleDef.isEmpty), which is
+		// the same behaviour as regular AutoLayer rules.
+
 		rg.rules.insert(insertIdx, r);
 
 		if( rg.collapsed )
@@ -230,6 +239,12 @@ class EditAllAutoLayerRules extends ui.modal.Panel {
 
 
 	function updateFullPanel() {
+		// Derived IntGrid layers
+		if( ld.isDerived() )
+			jContent.addClass("derived");
+		else
+			jContent.removeClass("derived");
+
 		// Cleanup
 		jContent.find(">header, >header *").off();
 		ui.Tip.clear();
@@ -242,6 +257,7 @@ class EditAllAutoLayerRules extends ui.modal.Panel {
 			m.addAction({
 				label: L.t._("Use assistant (recommended)"),
 				iconId: "wizard",
+				show: ()->!ld.isDerived(), // Assistant is based on tilesets
 				cb: ()->{
 					if( ld.isAutoLayer() && ld.tilesetDefUid==null ) {
 						N.error( Lang.t._("This auto-layer doesn't have a tileset. Please pick one in the LAYERS panel.") );
@@ -293,8 +309,8 @@ class EditAllAutoLayerRules extends ui.modal.Panel {
 		var curTd = li.getTilesetDef();
 		var jSelect = jContent.find("#autoLayerTileset");
 		jSelect.empty().off();
-		if( !ld.autoLayerRulesCanBeUsed() )
-			jSelect.prop("disabled",true);
+		if( !ld.isAutoLayer() || curTd==null )
+			jSelect.prop("disabled",true); // No tileset on this layer (eg. derived IntGrid)
 		else {
 			jSelect.prop("disabled",false);
 			function _tilesetCompatible(td:data.def.TilesetDef) {
@@ -344,7 +360,7 @@ class EditAllAutoLayerRules extends ui.modal.Panel {
 		jRuleGroupList.off().empty();
 
 		// Error in layer settings
-		if( !ld.autoLayerRulesCanBeUsed() ) {
+		if( !rulesCanBeUsed() ) {
 			jContent.find("button:not(.close), input").prop("disabled","true");
 			var jError = new J('<li> <div class="warning"/> </li>');
 			jError.appendTo(jRuleGroupList);
@@ -674,6 +690,7 @@ class EditAllAutoLayerRules extends ui.modal.Panel {
 			ctx.addElement( Ctx_Action({
 				label: L.t._("Duplicate and remap"),
 				subText: L.t._("Duplicate the group, and optionally remap IntGrid IDs and tiles"),
+				enable: ()->!ld.isDerived(), // Remap is based on tilesets
 				cb: ()->{
 					new ui.modal.dialog.RuleGroupRemap(ld,rg, (copy)->{
 						editor.ge.emit( LayerRuleGroupAdded(copy) );
@@ -694,6 +711,7 @@ class EditAllAutoLayerRules extends ui.modal.Panel {
 				label: L.t._("Assign group icon"),
 				iconId: rg.icon!=null ? null : "pickIcon",
 				jHtmlImg: rg.icon!=null ? project.resolveTileRectAsHtmlImg(rg.icon) : null,
+				enable: ()->!ld.isDerived(), // Icon picker is based on tilesets
 				cb: ()->onPickGroupIcon(rg),
 			});
 			if( rg.icon!=null )
@@ -734,6 +752,7 @@ class EditAllAutoLayerRules extends ui.modal.Panel {
 				ctx.addActionElement({
 					label: L.t._("Edit rules using the Assistant"),
 					iconId: "wizard",
+					enable: ()->!ld.isDerived(),
 					cb: ()->{
 						doUseWizard(rg);
 					},
@@ -886,6 +905,11 @@ class EditAllAutoLayerRules extends ui.modal.Panel {
 		jRule.addClass("rule");
 		if( rg.usesWizard )
 			jRule.addClass("wizard");
+		if( ld.isDerived() )
+			jRule.addClass("derived");
+
+		if( r.dualGrid )
+			jRule.addClass("dualGrid");
 
 		// Insert rule before
 		jRule.find(".insert.before").click( function(_) {
@@ -899,7 +923,7 @@ class EditAllAutoLayerRules extends ui.modal.Panel {
 
 		// Preview
 		var jPreview = jRule.find(".preview");
-		var sourceDef = ld.type==AutoLayer ? project.defs.getLayerDef(ld.autoSourceLayerDefUid) : ld;
+		var sourceDef = ld.type==AutoLayer || ld.isDerived() ? project.defs.getLayerDef(ld.autoSourceLayerDefUid) : ld;
 		if( r.isUsingUnknownIntGridValues(sourceDef) )
 			jPreview.append('<div class="error">Error</div>');
 		else {
@@ -919,6 +943,30 @@ class EditAllAutoLayerRules extends ui.modal.Panel {
 			showAffectedCells(r);
 		} );
 		jPreview.mouseleave( (ev)->editor.levelRender.clearTemp() );
+
+		// Derived IntGrid: display the output cells (values & offsets)
+		var jOutputs = jRule.find(".outputs");
+		if( ld.isDerived() ) {
+			if( !r.hasOutputValues() )
+				jOutputs.append('<em class="empty">No output value!</em>');
+			else
+				for(o in r.outputs) {
+					if( o.isEmpty() )
+						continue;
+
+					var jEntry = new J('<span class="outputEntry"/>');
+					jEntry.appendTo(jOutputs);
+					for(v in o.values) {
+						var iv = ld.getIntGridValueDef(v);
+						if( iv==null )
+							continue;
+						jEntry.append('<span class="outputValue" style="background-color:${C.intToHex(iv.color)};color:${C.intToHex(C.autoContrast(iv.color))}">${iv.identifier!=null ? iv.identifier : Std.string(iv.value)}</span>');
+					}
+					jEntry.append('<span class="offset" title="Cell offset of the written values">+${o.offsetX},${o.offsetY}</span>');
+				}
+		}
+		else
+			jOutputs.hide();
 
 		// Random chance
 		var old = r.chance;

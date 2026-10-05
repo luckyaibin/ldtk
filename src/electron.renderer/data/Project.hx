@@ -1233,6 +1233,7 @@ class Project {
 		for(l in w.levels) {
 			var li = l.getLayerInstance(layer);
 			if( li!=null ) {
+				li.refreshDerivedValues(); // Computed values must be up-to-date before scanning
 				for(cx in 0...li.cWid)
 				for(cy in 0...li.cHei)
 					if( li.getIntGrid(cx,cy)==valueId )

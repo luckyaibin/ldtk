@@ -633,7 +633,7 @@ class GenericLevelElementGroup {
 				? [ editor.curLayerInstance ]
 				: editor.curLevel.layerInstances;
 			for(li in layers)
-				if( editor.levelRender.isLayerVisible(li) && ( li.def.type==IntGrid || li.def.type==Tiles ) ) {
+				if( editor.levelRender.isLayerVisible(li) && ( li.def.type==IntGrid && !li.def.isDerivedIntGrid || li.def.type==Tiles ) ) {
 					for(r in originalRects) {
 						for(cx in li.levelToLayerCx(r.leftPx)...li.levelToLayerCx(r.rightPx+1))
 						for(cy in li.levelToLayerCy(r.topPx)...li.levelToLayerCy(r.bottomPx+1)) {

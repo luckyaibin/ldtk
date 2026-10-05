@@ -900,6 +900,10 @@ class WorldRender extends dn.Process {
 				return;
 			}
 
+			// Derived IntGrid: compute values lazily
+			if( li.def.isDerived() && li.derivedValuesDirty )
+				li.applyAllDerivedRules();
+
 			var pixelGrid = new dn.heaps.PixelGrid(li.def.gridSize, li.cWid, li.cHei);
 			wl.render.addChildAt(pixelGrid,0);
 			pixelGrid.x = li.pxTotalOffsetX;

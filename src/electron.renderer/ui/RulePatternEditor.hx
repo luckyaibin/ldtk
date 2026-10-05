@@ -54,6 +54,9 @@ class RulePatternEditor {
 		if( previewMode )
 			jRoot.addClass("preview");
 
+		if( rule.dualGrid )
+			jRoot.addClass("dualgrid");
+
 		// Add a rollover tip
 		function addExplain(jTarget:js.jquery.JQuery, desc:String) {
 			if( explainCell==null )
@@ -81,8 +84,15 @@ class RulePatternEditor {
 			if( isEditable() )
 				jCell.addClass("editable");
 
+			// Dual-grid mode: only the center cell (the "terrain" value) is used
+			var isDualGridIgnoredCell = rule.dualGrid && !isCenter;
+			if( isDualGridIgnoredCell ) {
+				jCell.addClass("disabled");
+				addExplain(jCell, 'This cell is ignored.\nIn dual-grid mode, only the center value matters: it defines the terrain rendered at each grid corner, using the 4 cells around that corner.');
+			}
+
 			// Center guide
-			if( isCenter ) {
+			if( isCenter && !layerDef.isDerived() ) { // Derived IntGrid layers don't render tiles: keep the center cell as a regular pattern cell
 				switch rule.tileMode {
 					case Single:
 						jCell.addClass("center");
@@ -112,16 +122,30 @@ class RulePatternEditor {
 				if( previewMode ) {
 					var td = Editor.ME.curLayerInstance.getTilesetDef();
 					if( td!=null ) {
-						var jTile = td.createCanvasFromTileId(rule.tileRectsIds.length>0 ? rule.tileRectsIds[0][0] : null, 32);
+						var previewTid : Null<Int> = null;
+						var hasMultipleTids = false;
+						if( rule.dualGrid ) {
+							// Dual-grid: preview the last filled mask slot's tile (usually the "full block" mask 15)
+							for(mask in 0...rule.tileRectsIds.length)
+								if( rule.tileRectsIds[mask].length>0 ) {
+									previewTid = rule.tileRectsIds[mask][0];
+									hasMultipleTids = rule.tileRectsIds[mask].length>1;
+								}
+						}
+						else if( rule.tileRectsIds.length>0 ) {
+							previewTid = rule.tileRectsIds[0][0];
+							hasMultipleTids = rule.tileRectsIds.length>1;
+						}
+						var jTile = td.createCanvasFromTileId(previewTid, 32);
 						jCell.append(jTile);
-						if( rule.tileRectsIds.length>1 )
+						if( hasMultipleTids )
 							jTile.addClass("multi");
 					}
 				}
 			}
 
 			// Cell value (color + tile)
-			if( !isCenter || !previewMode ) {
+			if( !isDualGridIgnoredCell && (!isCenter || !previewMode || layerDef.isDerived()) ) {
 				var ruleValue = rule.getPattern(cx,cy);
 				if( ruleValue!=0 ) {
 					var intGridVal = M.iabs(ruleValue);
@@ -192,7 +216,7 @@ class RulePatternEditor {
 			}
 
 			// Edit grid value
-			if( isEditable() ) {
+			if( isEditable() && !isDualGridIgnoredCell ) {
 
 				var anyChange = false;
 				function draw() {

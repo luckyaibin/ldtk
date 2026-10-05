@@ -11,7 +11,7 @@ class IntGridValuePicker extends ui.modal.Dialog {
 		addClass("intGridValuePicker");
 		var jList= new J('<ul/>');
 		jContent.append(jList);
-		sourceLd = ld.type==IntGrid ? ld : ld.autoSourceLd;
+		sourceLd = ld.type==IntGrid && !ld.isDerivedIntGrid ? ld : ld.autoSourceLd;
 		if( sourceLd==null ) {
 			N.error("Invalid source IntGrid layer");
 			close();
