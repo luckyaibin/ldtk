@@ -1,5 +1,10 @@
 ![](https://github.com/deepnight/ldtk/blob/master/app/assets/appIcon.png)
 
+# Modified the source code and support display dual grid now
+
+![示意图](./tests/ltdk_test1/dualgrid-ldtk.png)
+
+
 **Level Designer Toolkit** (*LDtk*) is a **modern**, **efficient** and **open-source** 2D level editor with a strong focus on user-friendliness.
 
 Links: [Official website](https://ldtk.io/) | [Haxe API (on GitHub)](https://github.com/deepnight/ldtk-haxe-api)
